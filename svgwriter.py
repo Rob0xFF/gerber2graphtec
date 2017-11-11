@@ -13,7 +13,7 @@ class svgwriter:
                 # create polygon list and convert user units to be in inch (*90)
                 points.append((p[0] * 90, p[1] * 90))
             
-            poly = self.dwg.polygon(points=points, fill='none', stroke=color, stroke_width="0.01mm")
+            poly = self.dwg.polygon(points=points, fill='none', stroke=color, stroke_width="0.1mm")
             self.dwg.add(poly)
 
     def finish(self):
