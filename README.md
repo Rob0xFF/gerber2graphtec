@@ -14,7 +14,7 @@ https://github.com/mossblaser/py_silhouette
 
 GUI:
 
-An GUI has been provided by jesuscf (see the dangerousprototypes.com thread linked above).  It allows interactive selection of the input Gerber file, parameters, and cutting operations.  To use it, run the file g2g_gui.py.
+An GUI has been provided by jesuscf (see the dangerousprototypes.com thread linked above).  It allows interactive selection of the input Gerber file, parameters, and cutting operations.  To use it, run the file g2g_gui.py. In this version, it has gotten some major improvements:
 
 ![screenshot 1](Screenshot_1.png)
 
