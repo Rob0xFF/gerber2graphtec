@@ -16,7 +16,7 @@ GUI:
 
 An GUI has been provided by jesuscf (see the dangerousprototypes.com thread linked above).  It allows interactive selection of the input Gerber file, parameters, and cutting operations.  To use it, run the file g2g_gui.py.
 
-![screenshot 1](Screenshot_1.png)
+![screenshot 1][Screenshot_1.png]
 
 Credits:
 
