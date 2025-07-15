@@ -141,7 +141,7 @@ class Gui(QWidget):
         left.addWidget(dbox)
         # files
         fbox=QGroupBox("Files"); fg=QGridLayout(fbox)
-        row(fg,"Gerber File:","gerber","/Users/robbeh/Nextcloud/opav2/Gerber/opav2-[v2]_smdmask_top.gbr",0); row(fg,"Output File:","output","/Users/robbeh/Nextcloud/opav2/Graphtec/out.graphtec",1)
+        row(fg,"Gerber File:","gerber","in.gbr",0); row(fg,"Output File:","output","out.graphtec",1)
         fg.addWidget(QPushButton("Browse",clicked=lambda:self._browse(True)),0,2)
         fg.addWidget(QPushButton("Browse",clicked=lambda:self._browse(False)),1,2)
         left.addWidget(fbox)
