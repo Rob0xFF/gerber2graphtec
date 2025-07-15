@@ -1,2 +1,6 @@
 *~
 *.pyc
+legacy/file2graphtec
+legacy/g2g_gui.py
+legacy/g2g_gui_pyqt.py
+legacy/gerber2graphtec
