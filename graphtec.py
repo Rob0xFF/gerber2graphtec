@@ -99,7 +99,7 @@ class graphtec:
   def set(self, **kwargs):
     for k in kwargs:
       if k=='speed':
-        self.emit("!" + str(kwargs[k]) + "\x03")
+        self.emit("!" + str(kwargs[k]) + ",0\x03")
       elif k=='force':
         self.emit("FX" + str(kwargs[k]) + ",0\x03")
       elif k=='offset':
