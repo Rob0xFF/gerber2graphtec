@@ -4,7 +4,6 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 DEBUG = False
-DEBUG_SVG = True
 
 def log(s):
     if DEBUG:
@@ -203,14 +202,6 @@ def fix_small_geometry(strokes, min_size, min_dist):
         # make sure to close polygon
         smallrect_strokes.append(bbox + [bbox[0]])         
 
-    
-    if (DEBUG_SVG):
-        import svgwriter
-        svg = svgwriter.svgwriter("_tmp_gerber.svg")
-        svg.draw_polygon(smallrect_strokes, 'blue')
-        svg.draw_polygon(processed_strokes, 'black')
-        svg.draw_polygon(small_rects, 'red')
-        svg.finish()
 
     return smallrect_strokes + processed_strokes 
 

@@ -6,8 +6,8 @@ import sys
 import math
 
 class graphtec:
-  def __init__(self):
-    self.fd = sys.stdout
+  def __init__(self, out_file=None):
+    self.fd = out_file if out_file else sys.stdout
     self.scale = 2.54*200
     self.offset = (4.0,0.5)
     self.matrix = (1,0,0,1)

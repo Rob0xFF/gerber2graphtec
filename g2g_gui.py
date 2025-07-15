@@ -1,419 +1,338 @@
-#!/usr/bin/env python
-import Tkinter
-import tkMessageBox
-import tkFileDialog
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import sys
-import os
-import string
+import traceback
+from pathlib import Path
 
-from Tkinter import *
-from os import path, access, R_OK, W_OK
+import usb.core, usb.util
 
-top = Tkinter.Tk()
-top.title("Gerber to Graphtec")
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QLineEdit, QPushButton, QFileDialog,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QSizePolicy, QSpacerItem,
+    QGraphicsScene, QMessageBox, QGraphicsPathItem, QGraphicsView,
+)
+from PyQt5.QtCore import Qt, QObject, pyqtSignal, QPointF
+from PyQt5.QtGui import QPainterPath, QPen, QPainter
 
-Gerber_name = StringVar()
-Output_name = StringVar()
-gerbv_path = StringVar()
-pstoedit_path  = StringVar()
-offset_str  = StringVar()
-border_str  = StringVar()
-matrix_str  = StringVar()
-speed_str  = StringVar()
-force_str  = StringVar()
-cut_mode_str  = StringVar()
-merge_str  = StringVar()
-merge_threshold_str  = StringVar()
-cutter_shared_name_str  = StringVar()
-CONFPATH='./g2g_gui.cnf'
-help_text = 'Help:\n\nGerber File \n- input Gerber (*.gbr) file\n\nOutput File \n- Graphtec / Silhouette (*.gpgl) file to send to the plotter\n\nOffset \n- translate to device coordinates x,y (inches)\n\nBorder \n- cut a border around the bounding box of the gerber file; 0,0 to disable\n\nMatrix \n- transform coordinates by [a b;c d]\n\nSpeed \n- use speed s in device units; s2,s3 for multiple passes\n\nForce \n- use force f in device units; f2,f3 for multiple passes\n\nMerge \n- Merge small SMD Pads\n\nMerge Threshold\n- Min Size, Min Distance\n\nCut Mode \n- 0 for highest accuracy (fine pitch), 1 for highest speed\n\nCutter Device Name (Linux) \n- device file of the plotter, e.g. /dev/usb/lp0'
+import graphtec
+import optimize
+import mergepads
+from gerber_parser import extract_strokes_from_gerber
 
-input_filename = ''
-output_filename = ''
-gerbv_filename = ''
-pstoedit_filename = ''
-offset_text = ''
-border_text = ''
-matrix_text = ''
-speed_text = ''
-force_text = ''
-cut_mode_text = ''
-merge_text = ''
-merge_threshold_text = ''
-cutter_shared_name_text = ''
+# ---------------------------------------------------------------------------
+# Patch for deprecated "rU" mode (still used by some legacy libraries)
+# ---------------------------------------------------------------------------
+import builtins
+_open = builtins.open
 
-offset = (4,0.5)
-border = (1,1)
-matrix = (1,0,0,1)
-speed = [2,2]
-force = [8,30]
-cut_mode = 0
-merge = 0
-merge_threshold = [0.014,0.009]  # min_size, min_distance in inch
+def _open_patch(filename, mode="r", *args, **kwargs):
+    if "U" in mode:
+        mode = mode.replace("U", "")
+    return _open(filename, mode, *args, **kwargs)
 
-def floats(s):
-  return map(float,string.split(s,','))
+builtins.open = _open_patch
 
-def main_program():
-  #
-  # convert file to pic format
-  #
+# ---------------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------------
 
-  if not os.path.exists(Gerber_name.get()):
-    get_input_filename()
-  if not os.path.exists(Gerber_name.get()):
-    tkMessageBox.showerror("G2G_GUI ERROR", "The path provided for the input Gerber file is invalid.")
-    return
+def floats(s: str):
+    """Wandelt kommaseparierte Zahlen in Float-Liste um."""
+    return list(map(float, s.strip().split(",")))
 
-  head, tail = os.path.split(Gerber_name.get())
+# ---------------------------------------------------------------------------
+# Zoom‑capable QGraphicsView
+# ---------------------------------------------------------------------------
+class ZoomView(QGraphicsView):
+    """QGraphicsView mit Mausrad-Zoom (¼× … 16×) — Anker unter Maus."""
 
-  if os.name=='nt':
-    temp_pdf = os.path.normpath("%s\_tmp_gerber.pdf" % (head))
-    temp_pic = os.path.normpath("%s\_tmp_gerber.pic" % (head))
-    temp_bat = os.path.normpath("%s\_tmp_gerber.bat" % (head))
-  else:
-    temp_pdf = "_tmp_gerber.pdf"
-    temp_pic = "_tmp_gerber.pic"
+    _ZOOM_STEP = 1.15
+    _ZOOM_MIN  = -10  # • 1 / 1.15^10  ≈ 0.25×
+    _ZOOM_MAX  =  20  # • 1.15^20      ≈ 16×
 
-  if os.name=='nt':
-    if not os.path.exists(gerbv_path.get()):
-      tkMessageBox.showerror("G2G_GUI ERROR", "The path provided for gerbv is invalid.")
-      return
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    if not os.path.exists(pstoedit_path.get()):
-      tkMessageBox.showerror("G2G_GUI ERROR", "The path provided for pstoedit is invalid.")
-      return
-  
-  if os.name=='nt':
-    os.system("echo \"%s\" --export=pdf --output=%s --border=0 \"%s\" > \"%s\"" % (os.path.normpath(gerbv_path.get()),temp_pdf,os.path.normpath(Gerber_name.get()),temp_bat))
-    os.system("echo \"%s\" -q -f pic \"%s\" \"%s\" >> \"%s\"" % (os.path.normpath(pstoedit_path.get()),temp_pdf,temp_pic, temp_bat))
-    os.system("\"%s\"" % temp_bat)
-  else:
-    os.system("%s --export=pdf --output=%s --border=0 \"%s\"" % (os.path.normpath(gerbv_path.get()),temp_pdf,os.path.normpath(Gerber_name.get())))
-    os.system("%s -q -f pic \"%s\" \"%s\"" % (os.path.normpath(pstoedit_path.get()),temp_pdf,temp_pic))
+        # Render-Qualität
+        self.setRenderHint(QPainter.Antialiasing)
 
-  original_stdout = sys.stdout  # keep a reference to STDOUT
+        # Zoomen unter Maus / zentriert
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
 
-  if Output_name.get():
-    sys.stdout = open(Output_name.get(), 'w')
+        self._zoom = 0
 
-  if not offset_str.get():
-    default_offset_str()
-  if not border_str.get():
-    default_border_str()
-  if not matrix_str.get():
-    default_matrix_str()
-  if not speed_str.get():
-    default_speed_str()
-  if not force_str.get():
-    default_force_str()
-  if not merge_str.get():
-    default_merge_str()
-  if not merge_threshold_str.get():
-    default_merge_threshold_str()
-  if not cut_mode_str.get():
-    default_cut_mode_str()
-    
-  offset = floats(offset_str.get())
-  border = floats(border_str.get())
-  matrix = floats(matrix_str.get())
-  speed = floats(speed_str.get())
-  force = floats(force_str.get())
-  merge = floats(merge_str.get())
-  merge_threshold = floats(merge_threshold_str.get())
-  cut_mode = int(cut_mode_str.get())
+    # ------------------------------------------------------------------
+    # Mouse‑wheel override
+    # ------------------------------------------------------------------
+    def wheelEvent(self, event):
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:                       # horizontaler Scroll → ignorieren
+            return super().wheelEvent(event)
 
-  #
-  # main program
-  #
+        direction = 1 if delta_y > 0 else -1
+        if not (self._ZOOM_MIN <= self._zoom + direction <= self._ZOOM_MAX):
+            return  # Zoom-Grenzen erreicht
 
-  import graphtec
-  import pic
-  import optimize
-  import mergepads
+        factor = self._ZOOM_STEP if direction > 0 else 1 / self._ZOOM_STEP
+        self.scale(factor, factor)
+        self._zoom += direction
 
-  g = graphtec.graphtec()
+# ---------------------------------------------------------------------------
+# Haupt-GUI
+# ---------------------------------------------------------------------------
+class G2GGui(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Gerber to Graphtec (Silhouette Cutter)")
+        self.setMinimumWidth(720)
+        self.setup_ui()
 
-  g.start()
+    # --------------------------------------------------------------
+    # Vorschau aktualisieren
+    # --------------------------------------------------------------
+    def update_preview(self, strokes):
+        self.scene.clear()
+        pen = QPen(Qt.black)
+        pen.setWidthF(0.001)
 
-  g.set(offset=(offset[0]+border[0]+0.5,offset[1]+border[1]+0.5), matrix=matrix)
-  strokes = pic.read_pic(temp_pic)
-  if not merge==0:
-  # merge multiple smaller pads to bigger pads spanning the same area
-    strokes = mergepads.fix_small_geometry(strokes, merge_threshold[0], merge_threshold[1])
-  max_x,max_y = optimize.max_extent(strokes)
+        for path in strokes:
+            if not path:
+                continue
+            painter_path = QPainterPath()
+            painter_path.moveTo(QPointF(*path[0]))
+            for pt in path[1:]:
+                painter_path.lineTo(QPointF(*pt))
+            item = QGraphicsPathItem(painter_path)
+            item.setPen(pen)
+            self.scene.addItem(item)
 
-  tx,ty = 0.5,0.5
+        # Szene-Rect setzen und gesamtes Board einpassen
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
-  border_path = [
-    (-border[0], -border[1]),
-    (max_x+border[0], -border[1]),
-    (max_x+border[0], max_y+border[1]),
-    (-border[0], max_y+border[1])
-  ]
+    # --------------------------------------------------------------
+    # UI aufbauen
+    # --------------------------------------------------------------
+    def setup_ui(self):
+        main_layout  = QHBoxLayout()
+        left_layout  = QVBoxLayout()
+        self.inputs  = {}
 
-  if cut_mode==0:
-    lines = optimize.optimize(strokes, border)
-    for (s,f) in zip(speed,force):
-      g.set(speed=s, force=f)
-      for x in lines:
-        g.line(*x)
-      if border[0]!=0 or border[1]!=0:
-       g.closed_path(border_path)
-  else:
-    for (s,f) in zip(speed,force):
-      g.set(speed=s, force=f)
-      for s in strokes:
-        g.closed_path(s)
-      if border[0]!=0 or border[1]!=0:
-       g.closed_path(border_path)
+        # -------------------------------------------------- Helper ---
+        def add_row(grid, label_text, key, default="", row=None):
+            label = QLabel(label_text)
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            edit = QLineEdit(default)
+            edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.inputs[key] = edit
+            row_index = row if row is not None else grid.rowCount()
+            grid.addWidget(label, row_index, 0)
+            grid.addWidget(edit, row_index, 1)
 
-  g.end()
+        # ---------------------------------------------- Dateien-Box ---
+        file_box   = QGroupBox("Files")
+        file_layout = QGridLayout()
 
-  if Output_name.get():
-    sys.stdout = original_stdout  # restore STDOUT back to its original value
-    tkMessageBox.showinfo("G2G_GUI Message", "File '%s' created"  % (Output_name.get()) )
+        # Gerber
+        gerber_edit = QLineEdit(
+            "in.gbr"
+        )
+        self.inputs["gerber"] = gerber_edit
+        file_layout.addWidget(QLabel("Gerber File:"), 0, 0)
+        file_layout.addWidget(gerber_edit, 0, 1)
+        btn_gerber = QPushButton("Browse")
+        btn_gerber.clicked.connect(lambda: self.browse_file("gerber"))
+        file_layout.addWidget(btn_gerber, 0, 2)
 
-def Save_Configuration():
-    f = open(CONFPATH,'w')
-    f.write(Gerber_name.get() + '\n')
-    f.write(Output_name.get() + '\n')
-    f.write(gerbv_path.get() + '\n')
-    f.write(pstoedit_path.get() + '\n')
-    f.write(offset_str.get() + '\n')
-    f.write(border_str.get() + '\n')
-    f.write(matrix_str.get() + '\n')
-    f.write(speed_str.get() + '\n')
-    f.write(force_str.get() + '\n')
-    f.write(merge_str.get() + '\n')
-    f.write(merge_threshold_str.get() + '\n')
-    f.write(cut_mode_str.get() + '\n')
-    f.write(cutter_shared_name_str.get() + '\n')
-    f.close()
+        # Output
+        output_edit = QLineEdit(
+            "out.graphtec"
+        )
+        self.inputs["output"] = output_edit
+        file_layout.addWidget(QLabel("Output File:"), 1, 0)
+        file_layout.addWidget(output_edit, 1, 1)
+        btn_output = QPushButton("Browse")
+        btn_output.clicked.connect(lambda: self.browse_file("output"))
+        file_layout.addWidget(btn_output, 1, 2)
 
-def Just_Exit():
-    top.destroy()
+        file_box.setLayout(file_layout)
+        left_layout.addWidget(file_box)
 
-def Send_to_Cutter():
-    if not Output_name.get():
-      get_output_filename()
-    if not Output_name.get():
-      return
-    src=os.path.normpath(Output_name.get())
-    
-    if not cutter_shared_name_str.get():
-      tkMessageBox.showerror("G2G_GUI ERROR", "The name of the cutter (as a shared printer) was not provided.")
-      return
+        # ---------------------------------------------- Parameter ---
+        param_box    = QGroupBox("Parameters")
+        param_layout = QGridLayout()
+        add_row(param_layout, "Offset:",           "offset",        "1.0,4.5",      0)
+        add_row(param_layout, "Border:",           "border",        "0,0",          1)
+        add_row(param_layout, "Matrix:",           "matrix",        "1,0,0,1",      2)
+        add_row(param_layout, "Speed:",            "speed",         "2,2",          3)
+        add_row(param_layout, "Force:",            "force",         "8,30",         4)
+        add_row(param_layout, "Merge:",            "merge",         "0",            5)
+        add_row(param_layout, "Merge Threshold:",  "merge_thresh",  "0.014,0.009",  6)
+        add_row(param_layout, "Cut Mode:",         "cut_mode",      "0",            7)
+        param_box.setLayout(param_layout)
+        left_layout.addWidget(param_box)
 
-    #if not os.path.exists(cutter_shared_name_str.get()):
-    #  tkMessageBox.showerror("G2G_GUI ERROR", "The name of the cutter (as a shared printer) does not exist.")
-    #  return
-    
-    dst=os.path.normpath(cutter_shared_name_str.get())
-    if os.name=='nt':
-      os.system("copy /B \"%s\" \"%s\"" % (src, dst))
-    else:
-      if sys.platform=='darwin':
-        os.system("./file2graphtec %s &" % (src))
-      else:
-        os.system("cat %s > %s" % (src, dst))
+        # ---------------------------------------------- Buttons ----
+        button_layout = QHBoxLayout()
+        convert_btn   = QPushButton("1. Create Graphtec / Silhouette File")
+        convert_btn.clicked.connect(self.main_program)
+        send_btn      = QPushButton("2. Send File to Cutter")
+        send_btn.clicked.connect(self.send_to_cutter)
+        button_layout.addWidget(convert_btn)
+        button_layout.addWidget(send_btn)
+        left_layout.addLayout(button_layout)
 
-def show_in_gerbv():
-    src=os.path.normpath(Gerber_name.get())
-    os.system("gerbv %s &" % (src))
+        # Spacer am Ende
+        left_layout.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
+        main_layout.addLayout(left_layout)
 
-def show_help():
-    tkMessageBox.showinfo("Help", help_text)
+        # ---------------------------------------------- Vorschau ----
+        self.scene = QGraphicsScene()
+        self.view  = ZoomView(self.scene)
+        self.view.setMinimumSize(800, 600)  # größere Start-Canvas
+        main_layout.addWidget(self.view, stretch=1)
 
-def get_input_filename():
-    input_filename=tkFileDialog.askopenfilename(title='Select paste mask Gerber file', filetypes=[('Gerber File', '*.gbr'),("All files", "*.*")] )
-    if input_filename:
-        Gerber_name.set(input_filename)
+        self.setLayout(main_layout)
 
-def get_output_filename():
-    output_filename=tkFileDialog.asksaveasfilename(title='Select output filename', filetypes=[('Output files', '*.txt'),("All files", "*.*")] )
-    if output_filename:
-        Output_name.set(output_filename)
+    # --------------------------------------------------------------
+    # Datei-Dialoge
+    # --------------------------------------------------------------
+    def browse_file(self, key):
+        if key == "gerber":
+            file, _ = QFileDialog.getOpenFileName(
+                self, "Select Gerber File", "", "Gerber Files (*.gbr);;All Files (*)"
+            )
+        else:
+            file, _ = QFileDialog.getSaveFileName(
+                self, "Select Output File", "", "Output Files (*.graphtec);;All Files (*)"
+            )
+        if file:
+            self.inputs[key].setText(file)
 
-def get_gerbv_path():
-    gerbv_filename=tkFileDialog.askopenfilename(title='Select gerbv program', initialfile='gerbv.exe', filetypes=[('Programs', '*.exe')] )
-    if gerbv_filename:
-        gerbv_path.set(gerbv_filename)
+    # --------------------------------------------------------------
+    # Haupt-Workflow
+    # --------------------------------------------------------------
+    def main_program(self):
+        try:
+            gerber_path   = Path(self.inputs["gerber"].text())
+            output_path   = Path(self.inputs["output"].text())
+            offset        = floats(self.inputs["offset"].text())
+            border        = floats(self.inputs["border"].text())
+            matrix        = floats(self.inputs["matrix"].text())
+            speeds        = floats(self.inputs["speed"].text())
+            forces        = floats(self.inputs["force"].text())
+            merge         = int(float(self.inputs["merge"].text()))
+            merge_thresh  = floats(self.inputs["merge_thresh"].text())
+            cut_mode      = int(self.inputs["cut_mode"].text())
 
-def get_pstoedit_path():
-    pstoedit_filename=tkFileDialog.askopenfilename(title='Select gerbv program', initialfile='pstoedit.exe', filetypes=[('Programs', '*.exe')] )
-    if pstoedit_filename:
-        pstoedit_path.set(pstoedit_filename)
+            if not gerber_path.is_file():
+                QMessageBox.critical(self, "Error", "Gerber file not found.")
+                return
 
-def default_offset_str():
-    offset_str.set("4.0,0.5")
-    
-def default_border_str():
-    border_str.set("1,1")
-    
-def default_matrix_str():
-    matrix_str.set("1,0,0,1")
+            strokes = extract_strokes_from_gerber(str(gerber_path))
 
-def default_speed_str():
-    speed_str.set("2,2")
+            # Skalierung inch → mm
+            scale    = 25.4
+            strokes  = [[(x / scale, y / scale) for x, y in poly] for poly in strokes]
 
-def default_force_str():
-    force_str.set("8,30")
+            if merge:
+                strokes = mergepads.fix_small_geometry(strokes, merge_thresh[0], merge_thresh[1])
 
-def default_merge_str():
-    merge_str.set("0")
+            max_x, max_y = optimize.max_extent(strokes)
+            border_path = [
+                (-border[0],            -border[1]),
+                ( max_x + border[0],    -border[1]),
+                ( max_x + border[0],     max_y + border[1]),
+                (-border[0],             max_y + border[1]),
+            ]
 
-def default_merge_threshold_str():
-    merge_threshold_str.set("0.014,0.009")
-    
-def default_cut_mode_str():
-    cut_mode_str.set("0")
+            # Vorschau
+            self.update_preview(strokes)
 
-Label(top, text="Gerber File ").grid(row=1, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=Gerber_name).grid(row=1, column=1)
-Tkinter.Button(top, width=9, text = "Browse", command = get_input_filename).grid(row=1, column=2)
+            # Output-Datei schreiben
+            with open(output_path, "w") as fout:
+                g = graphtec.graphtec(out_file=fout)
+                g.start()
+                g.set(offset=(offset[0] + border[0] + 0.5, offset[1] + border[1] + 0.5), matrix=matrix)
 
-Label(top, text="Output File ").grid(row=2, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=Output_name).grid(row=2, column=1)
-Tkinter.Button(top, width=9, text = "Browse", command = get_output_filename).grid(row=2, column=2)
+                def apply_speed_force(s: float, f: float):
+                    g.set(speed=s, force=f)
 
-if os.name=='nt':
-  Label(top, text="gerbv path ").grid(row=3, column=0, sticky=W)
-  Entry(top, bd =1, width=40, textvariable=gerbv_path).grid(row=3, column=1)
-  Tkinter.Button(top, width=9, text = "Browse", command = get_gerbv_path).grid(row=3, column=2)
+                if cut_mode == 0:
+                    lines = optimize.optimize(strokes, border)
+                    for s, f in zip(speeds, forces):
+                        apply_speed_force(s, f)
+                        for x in lines:
+                            g.line(*x)
+                        if any(border):
+                            g.closed_path(border_path)
+                else:
+                    for s, f in zip(speeds, forces):
+                        apply_speed_force(s, f)
+                        for s_poly in strokes:
+                            g.closed_path(s_poly)
+                        if any(border):
+                            g.closed_path(border_path)
 
-  Label(top, text="pstoedit path ").grid(row=4, column=0, sticky=W)
-  Entry(top, bd =1, width=40, textvariable=pstoedit_path).grid(row=4, column=1)
-  Tkinter.Button(top, width=9, text = "Browse", command = get_pstoedit_path).grid(row=4, column=2)
+                g.end()
 
-Label(top, text="Offset ").grid(row=5, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=offset_str).grid(row=5, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_offset_str).grid(row=5, column=2)
+            QMessageBox.information(self, "Fertig", f"Datei wurde gespeichert:\n{output_path}")
 
-Label(top, text="Border ").grid(row=6, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=border_str).grid(row=6, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_border_str).grid(row=6, column=2)
+        except Exception:
+            tb = traceback.format_exc()
+            print(tb, file=sys.stderr)
+            QMessageBox.critical(self, "Fehler", tb)
 
-Label(top, text="Matrix ").grid(row=7, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=matrix_str).grid(row=7, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_matrix_str).grid(row=7, column=2)
+    # --------------------------------------------------------------
+    # Senden an den Cutter
+    # --------------------------------------------------------------
+    def send_to_cutter(self):
+        VID, PID = 0x0B4D, 0x1123
+        dev = usb.core.find(idVendor=VID, idProduct=PID)
+        if dev is None:
+            raise ValueError("Plotter not found")
+        
+        dev.set_configuration()
+        cfg = dev.get_active_configuration()
+        intf = cfg[(0, 0)]                    # erstes Interface = Printer
+        ep_out = usb.util.find_descriptor(
+            intf,
+            custom_match=lambda e:
+                usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT
+        )
+        with open(self.inputs["output"].text(), "rb") as f:
+            data = f.read()
+        ep_out.write(data, timeout=0)
 
-Label(top, text="Speed ").grid(row=8, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=speed_str).grid(row=8, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_speed_str).grid(row=8, column=2)
+# ---------------------------------------------------------------------------
+# Uncaught-Hook – zeigt Exceptions als Dialog
+# ---------------------------------------------------------------------------
+class UncaughtHook(QObject):
+    exception_caught = pyqtSignal(object, object, object)
 
-Label(top, text="Force ").grid(row=9, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=force_str).grid(row=9, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_force_str).grid(row=9, column=2)
+    def __init__(self):
+        super().__init__()
+        sys.excepthook = self.handle_exception
+        self.exception_caught.connect(self.show_messagebox)
 
-Label(top, text="Merge ").grid(row=10, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=merge_str).grid(row=10, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_merge_str).grid(row=10, column=2)
+    def handle_exception(self, exctype, value, exc_traceback):
+        if issubclass(exctype, KeyboardInterrupt):
+            sys.__excepthook__(exctype, value, exc_traceback)
+        else:
+            self.exception_caught.emit(exctype, value, exc_traceback)
 
-Label(top, text="Merge Threshold").grid(row=11, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=merge_threshold_str).grid(row=11, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_merge_threshold_str).grid(row=11, column=2)
+    def show_messagebox(self, exctype, value, exc_traceback):
+        tb = "".join(traceback.format_exception(exctype, value, exc_traceback))
+        QMessageBox.critical(None, "Uncaught Exception", tb)
 
-Label(top, text="Cut Mode ").grid(row=12, column=0, sticky=W)
-Entry(top, bd =1, width=40, textvariable=cut_mode_str).grid(row=12, column=1)
-Tkinter.Button(top, width=9, text = "Default", command = default_cut_mode_str).grid(row=12, column=2)
-
-if os.name=='nt':
-  Label(top, text="Cutter Shared Name").grid(row=13, column=0, sticky=W)
- 
-else:
-  if not sys.platform=='darwin':
-    Label(top, text="Cutter Device Name").grid(row=13, column=0, sticky=W)
-    Entry(top, bd =1, width=40, textvariable=cutter_shared_name_str).grid(row=13, column=1, sticky=E)
-
-if sys.platform=='darwin':
-  Tkinter.Button(top, width = 50, pady = 10, text = "View Gerber file in gerbv", command = show_in_gerbv).grid(row=14, column=0, columnspan=4)
-
-Tkinter.Button(top, width = 50, pady = 10, text = "1. Create Graphtec / Silhouette File", command = main_program).grid(row=15, column=0, columnspan=4)
-Tkinter.Button(top, width = 50, pady = 10, text = "2. Send Graphtec / Silhouette File to Cutter", command = Send_to_Cutter).grid(row=16, column=0, columnspan=4)
-Tkinter.Button(top, width = 50, pady = 10, text = "Save Configuration", command = Save_Configuration).grid(row=17, column=0, columnspan=4)
-Tkinter.Button(top, width = 50, pady = 10, text = "Help", command = show_help).grid(row=18, column=0, columnspan=4)
-Tkinter.Button(top, width = 50, pady = 10, text = "-> Exit", command = Just_Exit).grid(row=19, column=0, columnspan=4)
-
-
-if path.isfile(CONFPATH) and access(CONFPATH, R_OK):
-    f = open(CONFPATH,'r')
-    input_filename = f.readline()
-    input_filename = input_filename.strip()
-    output_filename = f.readline()
-    output_filename = output_filename.strip()
-    gerbv_filename = f.readline()
-    gerbv_filename = gerbv_filename.strip()
-    pstoedit_filename = f.readline()
-    pstoedit_filename = pstoedit_filename.strip()
-    offset_text =  f.readline()
-    offset_text = offset_text.strip()
-    border_text =  f.readline()
-    border_text = border_text.strip()
-    matrix_text =  f.readline()
-    matrix_text = matrix_text.strip()
-    speed_text =  f.readline()
-    speed_text = speed_text.strip()
-    force_text =  f.readline()
-    force_text = force_text.strip()
-    merge_text =  f.readline()
-    merge_text = merge_text.strip()
-    merge_threshold_text =  f.readline()
-    merge_threshold_text = merge_threshold_text.strip()
-    cut_mode_text =  f.readline()
-    cut_mode_text = cut_mode_text.strip()
-    cutter_shared_name_text =  f.readline()
-    cutter_shared_name_text = cutter_shared_name_text.strip()
-    f.close()
-
-if not input_filename:
-    input_filename=""
-if not output_filename:
-    output_filename="result.txt"
-if not gerbv_filename:
-    if os.name=='nt':
-        gerbv_filename="C:/Program Files (x86)/gerbv-2.6.0/bin/gerbv.exe"
-    else:
-        gerbv_filename="gerbv"
-if not pstoedit_filename:
-    if os.name=='nt':
-        pstoedit_filename="C:/Program Files/pstoedit/pstoedit.exe"
-    else:
-        pstoedit_filename="pstoedit"
-if not offset_text:
-    offset_text="4.0,0.5"
-if not border_text:
-    border_text="1,1"
-if not matrix_text:
-    matrix_text="1,0,0,1"
-if not speed_text:
-    speed_text="2,2"
-if not force_text:
-    force_text="8,30"
-if not merge_text:
-    merge_text="0"
-if not merge_threshold_text:
-    merge_threshold="0.014,0.009"
-if not cut_mode_text:
-    cut_mode_text="0"
-if not cutter_shared_name_text:
-    if os.name=='nt':
-        cutter_shared_name_text="\\\\[Computer Name]\\[Shared Name]"
-    else:
-        cutter_shared_name_text="/dev/usb/lp0"
-
-Gerber_name.set(input_filename)
-Output_name.set(output_filename)
-gerbv_path.set(gerbv_filename)
-pstoedit_path.set(pstoedit_filename)
-offset_str.set(offset_text)
-border_str.set(border_text)
-matrix_str.set(matrix_text)
-speed_str.set(speed_text)
-force_str.set(force_text)
-merge_str.set(merge_text)
-merge_threshold_str.set(merge_threshold_text)
-cut_mode_str.set(cut_mode_text)
-cutter_shared_name_str.set(cutter_shared_name_text)
-
-top.mainloop()
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    UncaughtHook()
+    win = G2GGui()
+    win.show()
+    sys.exit(app.exec_())
