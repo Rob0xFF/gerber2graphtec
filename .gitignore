@@ -8,3 +8,4 @@ out.graphtec
 /build
 *.spec
 /dist/gerber2graphtec/_internal
+/dist/Gerber2Graphtec.app/Contents
