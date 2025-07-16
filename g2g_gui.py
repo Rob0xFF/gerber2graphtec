@@ -22,7 +22,7 @@ from enum import Enum
 import usb.core
 import usb.util
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPointF, QTimer, QSettings
-from PyQt5.QtGui import QPainterPath, QPen, QFont
+from PyQt5.QtGui import QPainterPath, QPen, QFont, QColor, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -426,6 +426,40 @@ class Gui(QWidget):
         # org/app as requested
         return QSettings("Rob0xFF", "Gerber2Graphtec")
 
+    def _update_pen_color(self):
+        """
+        Pick a contrasting preview stroke/text color based on the current Qt palette.
+        Called at startup and whenever the app receives a PaletteChange event.
+        """
+        pal = self.view.palette() if hasattr(self, "view") else self.palette()
+
+        # Prefer Base (viewport bg); fall back to Window.
+        bg = pal.color(QPalette.Base)
+        if not bg.isValid():
+            bg = pal.color(QPalette.Window)
+
+        # Perceived luminance (sRGB-ish)
+        lum = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
+
+        if lum < 128:  # dark background -> light strokes
+            fg = QColor("#e0e0e0")
+            txt = QColor("#bdbdbd")
+        else:          # light background -> dark strokes
+            fg = QColor("#000000")
+            txt = QColor("#808080")
+
+        self._preview_pen = QPen(fg)
+        self._preview_pen.setWidthF(0.001)
+        self._preview_text_color = txt
+
+    def changeEvent(self, ev):
+        from PyQt5.QtCore import QEvent
+        if ev.type() == QEvent.PaletteChange:
+            self._update_pen_color()
+            self._show_preview()
+        super().changeEvent(ev)
+
+        
     @staticmethod
     def _to_bool(v) -> bool:
         if isinstance(v, bool):
@@ -622,6 +656,8 @@ class Gui(QWidget):
         self.scene = QGraphicsScene()
         self.view = ZoomView(self.scene)
         self.view.setMinimumSize(800, 600)
+        # initialize preview colors for current theme
+        self._update_pen_color()
         main.addWidget(self.view)
 
         self._update_device()
@@ -695,12 +731,14 @@ class Gui(QWidget):
         self.scene.clear()
         item = self.scene.addText("Preview")
         font = QFont(item.font())
-        font.setPointSize(30)
+        font.setPointSize(30)  # already scaled down
         item.setFont(font)
-        item.setDefaultTextColor(Qt.lightGray)
+        # use theme‑contrasting text color
+        item.setDefaultTextColor(getattr(self, "_preview_text_color", Qt.lightGray))
         br = item.boundingRect()
         item.setPos(-br.width() / 2, -br.height() / 2)
         self.scene.setSceneRect(-br.width() / 2, -br.height() / 2, br.width(), br.height())
+
 
     # ------------------------- preview helper ------------------------------
     def _show_preview(self):
@@ -709,8 +747,8 @@ class Gui(QWidget):
             return
 
         self.scene.clear()
-        pen = QPen(Qt.black)
-        pen.setWidthF(0.001)
+        pen = getattr(self, "_preview_pen", QPen(Qt.black))
+        pen.setWidthF(0.001)  # widthF is safe; if already set, harmless
         for poly in self._strokes:
             path = QPainterPath(QPointF(*poly[0]))
             for x, y in poly[1:]:

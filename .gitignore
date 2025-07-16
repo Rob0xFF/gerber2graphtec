@@ -5,6 +5,6 @@ legacy/g2g_gui.py
 legacy/g2g_gui_pyqt.py
 legacy/gerber2graphtec
 out.graphtec
-/dist
 /build
 *.spec
+/dist/gerber2graphtec/_internal
