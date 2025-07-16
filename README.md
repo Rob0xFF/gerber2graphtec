@@ -1,4 +1,4 @@
-# Gerber‑to‑Graphtec (USB) – Cut Solder *Mask* & Paste Stencils on Silhouette Cutters
+# Gerber‑to‑Graphtec (USB) – Cut *Solder Mask* & *Paste Stencils* on Silhouette Cutters
 
 **Fork + modern PyQt5 GUI rewrite** of the classic *gerber2graphtec* toolchain for producing **accurate SMT solder *****mask***** (and paste) stencils** on low‑cost Graphtec‑engine craft cutters (Silhouette Cameo / Portrait family).
 
