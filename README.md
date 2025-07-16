@@ -1,74 +1,77 @@
-# Gerber‑to‑Graphtec (USB) – Cut Your Own Solder Paste Stencils
+# Gerber‑to‑Graphtec (USB) – Cut Solder *Mask* & Paste Stencils on Silhouette Cutters
 
-**Fork + modern GUI rewrite** of the classic *gerber2graphtec* toolchain for producing **accurate SMT solder‑paste stencils** on low‑cost Graphtec‑engine craft cutters (Silhouette Cameo / Portrait family).
+**Fork + modern PyQt5 GUI rewrite** of the classic *gerber2graphtec* toolchain for producing **accurate SMT solder *****mask***** (and paste) stencils** on low‑cost Graphtec‑engine craft cutters (Silhouette Cameo / Portrait family).
 
-This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion chain with a **direct Python workflow**:
+This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion chain and legacy Tk/Tkinter GUI with a **direct, cross‑platform Python + PyQt5 workflow**:
 
-* Parse Gerber using **[pcb-tools](https://github.com/curtacircuitos/pcb-tools)**.
-* Convert Gerber primitives (lines, arcs, flashes, polygons) into optimized cutter strokes.
-* Generate native Graphtec/Silhouette job commands (existing `graphtec` backend).
-* Stream the job **directly over USB** using **[pyusb](https://github.com/pyusb/pyusb)** – no CUPS, no `/dev/usb/lp0`, no driver install required on macOS.
-* Query cutter status (ready / moving / unloaded / paused) using control bytes inspired by **[py_silhouette](https://github.com/mossblaser/py_silhouette)**.
+- Parse Gerber natively using [**pcb‑tools**](https://github.com/curtacircuitos/pcb-tools) — no gerbv/pstoedit/Ghostscript toolchain needed.
+- Convert Gerber primitives (lines, arcs, flashes, polygons) into optimized cutter strokes.
+- Generate Graphtec/Silhouette job commands via the bundled `graphtec` backend.
+- Stream the job **directly over USB** using [**pyusb**](https://github.com/pyusb/pyusb) — no CUPS, no `/dev/usb/lp0` piping.
+- Poll cutter state (Ready / Moving / No Media / Paused) using low‑level control bytes informed by [**py\_silhouette**](https://github.com/mossblaser/py_silhouette).
 
-⚙️ **Primary purpose:** Quickly turn your PCB solder‑paste Gerber layer into a **mylar / film stencil** suitable for fine‑pitch hand soldering & reflow. Field‑tested on thin transparency film ~3–5 mil; usable down to ~0.5 mm pitch QFP/QFN & 0201 passives (with tuning).
+⚙️ **Primary purpose:** Quickly turn your PCB **solder *****mask***** (or solder‑paste)** Gerber layer into a **mylar / film stencil** suitable for hand assembly, rework, reflow prototyping, and masking experiments. Field use shows good results in thin transparency film (\~3–5 mil) down to \~0.5 mm pitch with tuning.
 
 ---
 
 ## Screenshot
 
 
-![Gerber‑to‑Graphtec GUI screenshot](Screenshot.png)
+
+*(Image file should sit alongside this README in the repo root.)*
 
 ---
 
 ## Why this fork?
 
-The original `gerber2graphtec` command‑line tool remains a clever, proven path for producing high‑quality stencils on hobby cutters. Over time, however:
+The original `gerber2graphtec` command‑line tool and early GUI (Tk/Tkinter) produced excellent results but depended on an aging external toolchain (gerbv, pstoedit, Ghostscript, pic) and sometimes fragile USB printer paths. Installing all of that on modern macOS systems — and especially mixing in Windows — became painful.
 
-* Legacy utilities (gerbv, pstoedit, Ghostscript, pic) became cumbersome to install on macOS and Windows.
-* USB device nodes (e.g., `/dev/usb/lp0`) aren’t universally available.
-* Users increasingly expect an interactive GUI workflow.
-
-This fork modernizes the pipeline while preserving the original project’s proven cutting strategies (short segments, anti‑backlash planning, multi‑pass force profiles, etc.).
+This fork modernizes the pipeline while preserving the original project’s proven cutting strategies (short segment output, anti‑backlash planning, multi‑pass profiles, etc.). It adds a clean **PyQt5 GUI**, **direct USB streaming**, **live device status**, and **settings persistence**.
 
 ---
 
-## Key Features (Fork Enhancements)
+## Key Features
 
 ### Modern Gerber Ingest
-- Uses **pcb-tools** to read RS‑274X Gerber directly – no gerbv/pstoedit chain.
-- Handles common primitives: lines, rectangles, circles, obrounds, polygons, arcs (with angle normalization & segmentation).
-- Optional geometry cleanup: **merge small shapes** below user thresholds (size, spacing).
+
+- RS‑274X parsing via **pcb‑tools**.
+- Supports common primitives: lines, rectangles, circles, obrounds, polygons, arcs (normalized + segmented for cutting).
+- Optional geometry cleanup: **merge small shapes** below user thresholds (`min_size`, `min_dist`).
 
 ### USB‑Native Cutter Control
-- Auto‑detects connected Silhouette devices by VID/PID (Portrait / Cameo families).
-- Direct **bulk USB streaming** (chunked packets; configurable size).
-- Device **status polling** (Ready, Moving, No Media, Paused, Unknown) using commands derived from *py_silhouette*.
-- Color status indicator (red = none, yellow = not ready, green = ready, blue = cutting).
 
-### Interactive PyQt GUI
+- Auto‑detects connected Silhouette devices by VID/PID (Portrait / Cameo families; see table below).
+- Direct **bulk USB streaming** (chunked packets; tunable `CHUNK` size).
+- Device **status polling** (Ready, Moving, No Media, Paused) using commands informed by *py\_silhouette*.
+- Color state indicator: red = none, yellow = not ready, green = ready, blue = cutting.
+
+### Interactive PyQt5 GUI
+
 - **Prepare → Cut** 2‑step workflow.
-- Live preview canvas (zoom wheel; anti‑aliased view).
+- Live zoomable preview canvas (wheel zoom; anti‑aliased drawing).
 - Centered "Preview" placeholder when no data loaded.
-- **Multi‑Pass control**: choose 1–3 passes; per‑pass speed & force kept in sync.
-- **Enhanced vs Standard** cutting modes:
-  - *Enhanced*: line‑optimized strokes (fast, minimal lift; good for stencils).
-  - *Standard*: closed polygon cutting (original outline fidelity).
+- **Multi‑Pass control**: select 1–3 passes; per‑pass Speed & Force spin boxes stay in sync.
+- **Enhanced vs Standard** cutting modes: optimized line sequencing vs polygon outline cutting.
 - Offset & Margin (inches) to position stencil on sheet.
-- Transform matrix (advanced affine tweak).
-- Merge tolerance (min_size, min_dist in inches) for cleaning pad clusters.
-- Cancelable cut job with safe interruption and USB release.
-- Automatic settings persistence via **QSettings** (saved on Prepare).
+- Transform matrix (advanced affine tweak/calibration).
+- Merge tolerance (inches) for collapsing tiny apertures.
+- Cancelable cut with safe USB release.
+- Automatic settings persistence via **QSettings** (saved when you click *Prepare*).
 
 ### Reliability / UX
-- Job streaming occurs in a background thread; GUI remains responsive.
-- After cancel or job completion, USB interface is cleanly released.
-- Device state auto‑polls every second when idle; UI updates background color & text.
-- Pre‑flight readiness check warns if cutter has no media loaded.
+
+- Non‑blocking USB streaming thread keeps GUI responsive.
+- Post‑job USB cleanup prevents permission lockups between runs.
+- Auto device‑status polling (idle) + status refresh during jobs.
+- Pre‑flight readiness check warns if no media is loaded (helps avoid silent no‑cut failures).
 
 ---
 
 ## Quick Start
+
+> **Tested hardware:** Silhouette **Portrait (1st gen)** on macOS. Other cutters listed below are **auto‑detected but untested** — community feedback welcome!
+>
+> **OS support:** Developed on macOS. Windows & Linux builds are **not yet fully tested**; please report results.
 
 ### 1. Install (recommended: virtualenv)
 
@@ -79,7 +82,7 @@ pip install --upgrade pip
 pip install pcb-tools pyusb PyQt5
 ```
 
-> The repo includes small helper modules (`graphtec`, `optimize`, `mergepads`, `gerber_parser`) which are imported locally; no extra install step needed if you run from the source tree.
+The repository includes helper modules (`graphtec.py`, `optimize.py`, `mergepads.py`, `gerber_parser.py`) which are imported locally; no package install needed if you run from a clone of this repo.
 
 ### 2. Run the GUI
 
@@ -88,146 +91,148 @@ python g2g_gui.py
 ```
 
 ### 3. Prepare a Cut Job
-1. Load your solder‑paste **Gerber** (*.gbr*).
+
+1. Select your **Gerber** (*.gbr*) solder *mask* (or paste) layer.
 2. Choose an **output job file** (*.graphtec*).
-3. Adjust Offset / Margin as needed to locate your stencil on film.
-4. Select number of **Passes** (1–3) and set per‑pass Speed (1–10) & Force (1–33).
-5. (Optional) Enable **Merge small shapes** and set tolerance.
-6. Pick **Mode** → *Enhanced* (optimized) or *Standard* (polygons).
-7. Click **1. Prepare**. This parses the file, generates the job, shows a preview, and saves settings.
+3. Adjust **Offset** & **Margin** to position the stencil on your film.
+4. Pick **Passes** (1–3) and set per‑pass **Speed** (1–10) & **Force** (1–33).
+5. (Optional) Enable **Merge small shapes**; set **Merge tol.** (inches) as `min_size,min_dist`.
+6. Choose **Mode**: *Enhanced* (optimized lines) or *Standard* (closed polygons).
+7. Click **1. Prepare**. A preview renders; your settings are saved.
 
 ### 4. Cut
-1. Load film / mylar in cutter.
-2. Confirm the cutter shows *Ready* (green).
+
+1. Load film / mylar in the cutter.
+2. Wait for the status indicator to turn **green / Ready**.
 3. Click **2. Cut**.
-4. Watch progress; cancel if needed.
+4. Watch progress (cancel if needed).
 
 ---
 
 ## Parameter Reference
 
-| Parameter | Units | GUI Field | Description |
-|---|---|---|---|
-| Offset | inches | `Offset (in)` | X,Y shift applied before output. Use to locate stencil on loaded film. |
-| Margin | inches | `Margin (in)` | Extra border added around design extents; cutter can frame the area. |
-| Transform | raw coeffs | `Transform` | Affine matrix `[a,b,c,d]` (scales/shears). Advanced calibration. |
-| Passes | count | `Passes` | 1–3 multi‑pass cuts. Additional passes can increase cut quality in thicker film. |
-| Speed | steps | `Speed` columns | 1 = slowest, 10 = fastest. Lower speed improves detail in thin film. |
-| Force | steps | `Force` columns | 1 = light kiss cut, 33 = heavy. Dial in for your film & blade. |
-| Merge tol. | inches | `Merge tol.` | Two comma values: `min_size,min_dist`. Features smaller than `min_size` or closer than `min_dist` may be merged/simplified. Uses `mergepads.fix_small_geometry()`. |
-| Mode | select | `Mode` | **Enhanced:** optimized line sequencing (fast); **Standard:** closed polygons. |
+| Parameter  | Units      | GUI Field   | Description                                                                                                                                                      |
+| ---------- | ---------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Offset     | inches     | Offset (in) | X,Y shift applied before output. Use to locate stencil on loaded film.                                                                                           |
+| Margin     | inches     | Margin (in) | Extra border added around design extents; cutter can frame the area.                                                                                             |
+| Transform  | raw coeffs | Transform   | Affine matrix `[a,b,c,d]` (scales/shears). Advanced calibration / compensation.                                                                                  |
+| Passes     | count      | Passes      | 1–3 multi‑pass cuts. Additional passes can improve cut‑through in thicker film.                                                                                  |
+| Speed      | steps      | Speed cols  | 1 = slowest, 10 = fastest. Lower speed improves detail in thin film.                                                                                             |
+| Force      | steps      | Force cols  | 1 = light, 33 = heavy. Dial in for your film & blade.                                                                                                            |
+| Merge tol. | inches     | Merge tol.  | Two comma values: `min_size,min_dist`. Shapes smaller than `min_size` or closer than `min_dist` may be merged/simplified. Uses `mergepads.fix_small_geometry()`. |
+| Mode       | select     | Mode        | **Enhanced:** optimized line sequencing (fast); **Standard:** closed polygons (fidelity to outline).                                                             |
 
 ---
 
 ## Supported Devices (auto‑detected by VID/PID)
 
-| Model | VID | PID |
-|---|---|---|
-| Silhouette Portrait | 0x0B4D | 0x1123 |
-| Silhouette Portrait 2 | 0x0B4D | 0x1132 |
-| Silhouette Portrait 3 | 0x0B4D | 0x113A |
-| Silhouette Cameo | 0x0B4D | 0x1121 |
-| Silhouette Cameo 2 | 0x0B4D | 0x112B |
-| Silhouette Cameo 3 | 0x0B4D | 0x112F |
-| Silhouette Cameo 4 | 0x0B4D | 0x1137 |
-| Silhouette Cameo 4 Plus | 0x0B4D | 0x1138 |
-| Silhouette Cameo 4 Pro | 0x0B4D | 0x1139 |
+> VID/PID values sourced from the **py\_silhouette** project. Only **Silhouette Portrait (1st gen)** has been tested with this GUI so far; others are expected to work but need community validation.
 
-> Detection is first‑match. If multiple supported cutters are connected, the first one returned by USB enumeration will be used.
+| Model                   | VID    | PID    | Tested? |
+| ----------------------- | ------ | ------ | ------- |
+| Silhouette Portrait     | 0x0B4D | 0x1123 | ✅ macOS |
+| Silhouette Portrait 2   | 0x0B4D | 0x1132 | ❓       |
+| Silhouette Portrait 3   | 0x0B4D | 0x113A | ❓       |
+| Silhouette Cameo        | 0x0B4D | 0x1121 | ❓       |
+| Silhouette Cameo 2      | 0x0B4D | 0x112B | ❓       |
+| Silhouette Cameo 3      | 0x0B4D | 0x112F | ❓       |
+| Silhouette Cameo 4      | 0x0B4D | 0x1137 | ❓       |
+| Silhouette Cameo 4 Plus | 0x0B4D | 0x1138 | ❓       |
+| Silhouette Cameo 4 Pro  | 0x0B4D | 0x1139 | ❓       |
+
+Detection is first‑match: if more than one supported cutter is connected, the first enumerated USB device will be used.
 
 ---
 
 ## Materials & Cut Tips
 
-* Use **mylar / polyester film ~3–5 mil** thick (common laser transparency stock works well).
-* Many users **shrink paste apertures ~2 mils** in CAM before export; hobby blades can flare cuts slightly.
-* Start conservative: Speed ~2, Force ~5 first pass; add deeper force on 2nd/3rd passes.
-* Inspect with backlight; fully weeded apertures should be clean rectangles.
+- Use **mylar / polyester film \~3–5 mil** thick (laser transparency stock works well).
+- Many users **shrink PCB pad apertures \~2 mils** in CAM before export; hobby blades can flare geometry slightly.
+- Start conservative: Speed \~2, Force \~5 first pass; add deeper force on 2nd/3rd passes.
+- Inspect under backlight; weeded apertures should be crisp.
 
-(These guidelines build on real‑world results from the original project; see links below.)
+(These guidelines build on real‑world results from the original project; links below.)
 
 ---
 
-## Command‑Line Legacy (Original Project)
+## Dependencies (Python)
 
-The classic CLI version piped Gerber→Graphtec commands straight to a USB printer node:
+Extracted from the source modules in this repository:
+
+| Package       | Used For                                |
+| ------------- | --------------------------------------- |
+| **pcb-tools** | Native Gerber parsing (rs274x)          |
+| **pyusb**     | Direct USB access to Silhouette cutters |
+| **PyQt5**     | Cross‑platform GUI framework            |
+
+Install via pip:
 
 ```bash
-# basic usage
-gerber2graphtec paste.gbr > /dev/usb/lp0
-
-# with calibration & multi‑pass
-gerber2graphtec \
-  --offset 3,4 \
-  --matrix 1.001,0,-0.0005,0.9985 \
-  --speed 2,1 \
-  --force 5,25 \
-  paste.gbr > /dev/usb/lp0
+pip install pcb-tools pyusb PyQt5
 ```
 
-That still works if you build and run the original CLI. This fork’s GUI wraps and extends the same underlying concepts.
-
----
-
-## Upstream Usage Notes (Historical)
-
-The original README recommended:
-
-* Shrinking paste features by ~2 mils pre‑Gerber.
-* Cutting thin mylar / transparency stock (3–5 mil).
-* Experimenting with speeds / forces for best quality.
-* Using helper script **file2graphtec** on macOS / Windows when `/dev/usb/lp0` not available.
-* Installing via macports: `gerbv`, `pstoedit`, `libusb`, etc. (replaced in this fork; retained here for legacy reference.)
-* Watching out for old gerbv (<2.6.0) aperture omission bugs.
-
-Those notes are preserved for historical context; see *Links* below for deep dive discussions.
-
----
-
-## Original Resources & Further Reading
-
-These pages document the techniques, calibration ideas, and background that inspired this tool and its fork. (All links from the original project are retained.)
-
-- http://pmonta.com/blog/2012/12/25/smt-stencil-cutting/
-- http://dangerousprototypes.com/forum/viewtopic.php?f=68&t=5341
-- http://hackeda.com/blog/start-printing-pcb-stencils-for-about-200/
-- http://hackaday.com/2012/12/27/diy-smd-stencils-made-with-a-craft-cutter/
-
-### GUI origin
-An early optional GUI was contributed by **jesuscf** in the Dangerous Prototypes thread. This fork’s PyQt GUI is a modern re‑implementation.
-
-### Protocol Documentation Credits (Original Project)
-Thanks to the authors of **robocut** and **graphtecprint** for Graphtec protocol information:
-
-- http://gitorious.org/robocut
-- http://vidar.botfu.org/graphtecprint
-- https://github.com/jnweiger/graphtecprint
-
-Additional inspiration: **Cathy Sexton** – http://www.idleloop.com/robotics/cutter/index.php
-
----
-
-## Additional Open-Source Projects Referenced in This Fork
-
-### pcb-tools
-Used for native Gerber parsing (layers, primitives, flashes, apertures). We walk the PCB layer primitives and emit cutter strokes directly, bypassing gerbv/pstoedit.
-
-> GitHub: https://github.com/curtacircuitos/pcb-tools
-
-### py_silhouette
-Used as a reference for device VID/PID tables and low‑level USB control codes, especially querying device state (`ESC 0x05`) and general endpoint behavior.
-
-> GitHub: https://github.com/mossblaser/py_silhouette
+(Other imports in the source tree are Python standard library or local modules bundled with the repo.)
 
 ---
 
 ## Development Notes
 
-* Tested on **macOS** and **Linux**; Windows should work if PyUSB can claim the interface.
-* Python **3.9+** recommended (developed & tested on newer versions; PyQt5 compatible).
-* USB access may require udev rules (Linux) or administrator approval (macOS first connect).
-* If you see *permission denied* errors, try running once with `sudo` or update udev rules for your VID/PID.
-* Adjust `CHUNK` in `g2g_gui.py` to tune streaming granularity vs overhead. Smaller chunks = more progress updates, slightly more USB calls.
+- Developed & tested on **macOS** with a **Silhouette Portrait (gen 1)**.
+- Windows & Linux are **currently untested**; PyUSB + appropriate permissions *should* enable support — please report success/failures.
+- When running on Linux you may need a udev rule to grant non‑root USB access (VID 0x0B4D, matching your PID).
+- If the cutter seems to accept data instantly but does not move, confirm material is loaded; the GUI polls state but cannot always detect failed loads on all models.
+- Adjust `CHUNK` in `g2g_gui.py` to tune progress granularity vs overhead (smaller = finer progress updates).
+
+---
+
+## Original Resources & Further Reading
+
+These pages (from the **original project README**) document the techniques, calibration ideas, materials, and background that inspired this tool and its fork.
+
+- [http://pmonta.com/blog/2012/12/25/smt-stencil-cutting/](http://pmonta.com/blog/2012/12/25/smt-stencil-cutting/)
+- [http://dangerousprototypes.com/forum/viewtopic.php?f=68&t=5341](http://dangerousprototypes.com/forum/viewtopic.php?f=68\&t=5341)
+- [http://hackeda.com/blog/start-printing-pcb-stencils-for-about-200/](http://hackeda.com/blog/start-printing-pcb-stencils-for-about-200/)
+- [http://hackaday.com/2012/12/27/diy-smd-stencils-made-with-a-craft-cutter/](http://hackaday.com/2012/12/27/diy-smd-stencils-made-with-a-craft-cutter/)
+
+### GUI origin (historical)
+
+An early optional GUI was contributed by **jesuscf** (Tk/Tkinter) in the Dangerous Prototypes thread. This fork is a **complete PyQt5 rewrite** with direct USB streaming.
+
+### Protocol Documentation Credits (Original Project)
+
+Thanks to the authors of **robocut** and **graphtecprint** for Graphtec protocol information:
+
+- [http://gitorious.org/robocut](http://gitorious.org/robocut)
+- [http://vidar.botfu.org/graphtecprint](http://vidar.botfu.org/graphtecprint)
+- [https://github.com/jnweiger/graphtecprint](https://github.com/jnweiger/graphtecprint)
+
+Additional inspiration: **Cathy Sexton** – [http://www.idleloop.com/robotics/cutter/index.php](http://www.idleloop.com/robotics/cutter/index.php)
+
+---
+
+## Contributing
+
+**Community testing needed!** If you have any of the following, please help:
+
+- A Silhouette cutter *other than* Portrait (gen 1).
+- Windows or Linux environment.
+- Different film / stencil materials.
+
+Please try a small test cut and open a GitHub issue with:
+
+- Cutter model & firmware (if known).
+- OS + Python version.
+- Whether device auto‑detect worked.
+- Whether status reporting matched the machine’s panel.
+- Cut parameters (passes, speed/force) and material thickness.
+- Photos of the resulting stencil (optional but helpful!).
+
+Pull requests welcome for:
+
+- Verified device quirks / better VID+PID selection logic when multiple units connected.
+- Windows USB claim helpers.
+- Improved error messages when state polling fails.
+- Optional CLI front‑end to reuse the new pipeline.
 
 ---
 
@@ -239,21 +244,9 @@ If the upstream license file is missing in your fork, please copy it in full fro
 
 ---
 
-## Contributing
-
-Pull requests welcome! Ideas:
-- Native Windows device claim helpers.
-- Batch / CLI wrapper around the new Python pipeline.
-- Optional auto material length detection.
-- SVG overlay preview or aperture tagging.
-
-Open an issue if you hit trouble cutting ultra‑fine stencil apertures; include Gerber + your material, pass settings, and cutter model.
-
----
-
 ## Acknowledgements
 
-Huge thanks to the original *gerber2graphtec* author and community, including contributors in the Dangerous Prototypes forums, **jesuscf** (first GUI), the maintainers of **robocut**, **graphtecprint**, **pcb-tools**, and **py_silhouette**, and everyone who shared calibration tips for cutting reliable SMT stencils on hobby hardware.
+Huge thanks to the original *gerber2graphtec* author and community, including contributors in the Dangerous Prototypes forums, **jesuscf** (first GUI), the maintainers of **robocut**, **graphtecprint**, **pcb-tools**, and **py\_silhouette**, and everyone who shared calibration tips for cutting reliable SMT or solder‑mask stencils on hobby hardware.
 
 Happy cutting & good solder joints! 🔧🧪🧲
 
