@@ -1,4 +1,4 @@
-# Gerber‑to‑Graphtec (USB) – Cut *Solder Mask* & *Paste Stencils* on Silhouette Cutters
+# Gerber‑to‑Graphtec (USB) – Cut Solder *Mask* & Paste Stencils on Silhouette Cutters
 
 **Fork + modern PyQt5 GUI rewrite** of the classic *gerber2graphtec* toolchain for producing **accurate SMT solder *****mask***** (and paste) stencils** on low‑cost Graphtec‑engine craft cutters (Silhouette Cameo / Portrait family).
 
@@ -18,7 +18,7 @@ This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion cha
 
 
 
-![screenshot](Screenshot.png)
+*(Image file should sit alongside this README in the repo root.)*
 
 ---
 
@@ -79,7 +79,7 @@ This fork modernizes the pipeline while preserving the original project’s prov
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install --upgrade pip
-pip install numpy scipy pcb-tools pyusb PyQt5
+pip install pcb-tools pyusb PyQt5
 ```
 
 The repository includes helper modules (`graphtec.py`, `optimize.py`, `mergepads.py`, `gerber_parser.py`) which are imported locally; no package install needed if you run from a clone of this repo.
@@ -246,7 +246,14 @@ If the upstream license file is missing in your fork, please copy it in full fro
 
 ## Acknowledgements
 
-Huge thanks to the original *gerber2graphtec* author and community, including contributors in the Dangerous Prototypes forums, **jesuscf** (first GUI), the maintainers of **robocut**, **graphtecprint**, **pcb-tools**, and **py\_silhouette**, and everyone who shared calibration tips for cutting reliable SMT or solder‑mask stencils on hobby hardware.
+This fork stands on a lot of earlier work.
 
-Happy cutting & good solder joints! 🔧🧪🧲
+- The original *gerber2graphtec* command‑line utilities and community discussion that proved low‑cost craft cutters can produce usable SMT stencils.
+- Contributors in the Dangerous Prototypes forums, including **jesuscf**, who produced an early GUI (Tk/Tkinter) that helped many users get started.
+- The authors and maintainers of **robocut** and **graphtecprint**, whose protocol exploration informed Graphtec/Silhouette command formats.
+- The maintainers of **pcb‑tools** (native Gerber parsing) and **py\_silhouette** (Silhouette USB protocol & device state research), both of which influenced this rewrite.
+- Users who have shared real‑world cut settings, film choices, and calibration tips over the years.
+- Guidance and iterative coding help provided through **ChatGPT (OpenAI)** during the PyQt5 rewrite and debugging.
+
+Thank you to everyone who helps keep low‑cost stencil cutting practical and open.
 
