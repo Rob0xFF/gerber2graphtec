@@ -18,7 +18,7 @@ This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion cha
 
 > *Replace the image path below with your actual screenshot before publishing.*
 
-![Gerber‑to‑Graphtec GUI screenshot](docs/gui-screenshot.png)
+![Gerber‑to‑Graphtec GUI screenshot](Screenshot.png)
 
 ---
 
