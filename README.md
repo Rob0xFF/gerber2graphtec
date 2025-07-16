@@ -18,7 +18,7 @@ This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion cha
 
 
 
-*(Image file should sit alongside this README in the repo root.)*
+![screenshot](Screenshot.png)
 
 ---
 
