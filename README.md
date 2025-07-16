@@ -18,7 +18,7 @@ This fork replaces the original Gerber→(gerbv→pstoedit→pic) conversion cha
 
 
 
-*(Image file should sit alongside this README in the repo root.)*
+![screenshot](Screenshot.png)
 
 ---
 
@@ -79,7 +79,7 @@ This fork modernizes the pipeline while preserving the original project’s prov
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install --upgrade pip
-pip install pcb-tools pyusb PyQt5
+pip install numpy scipy pcb-tools pyusb PyQt5
 ```
 
 The repository includes helper modules (`graphtec.py`, `optimize.py`, `mergepads.py`, `gerber_parser.py`) which are imported locally; no package install needed if you run from a clone of this repo.
