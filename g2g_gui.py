@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gerber-to-Graphtec GUI — USB-only (synchronized multi-pass).
+Gerber-to-Graphtec GUI — USB-only (synchronized multi-pass, auto device status).
 
-UI refinements
---------------
-* Short English labels + tooltips.
-* Pass grid (Speed/Force per pass, 1–3).
-* Merge small shapes + tolerance.
-* Device auto-detect.
-* Non-blocking USB upload.
-* **NEW:** Centered “Preview” placeholder when no layout is loaded.
+Updates in this version
+-----------------------
+* **QSettings persistence**: remembers Gerber path, Job file path, offset, margin,
+  transform, merge enable, merge tolerance, mode, and all pass speed/force values.
+  Settings are **saved when you click “1. Prepare”** (not on close).
+* **Preview placeholder** text size reduced by 50% (now ~36pt).
 """
 
 from __future__ import annotations
@@ -19,10 +17,11 @@ import sys
 import traceback
 from pathlib import Path
 from typing import List, Optional, Tuple
+from enum import Enum
 
 import usb.core
 import usb.util
-from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPointF
+from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPointF, QTimer, QSettings
 from PyQt5.QtGui import QPainterPath, QPen, QFont
 from PyQt5.QtWidgets import (
     QApplication,
@@ -76,7 +75,33 @@ _DEVICES: List[Tuple[str, int, int]] = [
 _SUPPORTED = [(vid, pid) for _, vid, pid in _DEVICES]
 _NAME = {(vid, pid): name for name, vid, pid in _DEVICES}
 
-CHUNK = 8192  # 8 KiB USB bulk packet
+CHUNK = 8192  # 8 KiB USB bulk packet (tweak for finer progress if desired)
+
+# --------------------------------------------------------------------------- #
+# Cutter state enum (mirrors py_silhouette DeviceState)                       #
+# --------------------------------------------------------------------------- #
+class CutterState(Enum):
+    READY    = b"0"
+    MOVING   = b"1"
+    UNLOADED = b"2"
+    PAUSED   = b"3"
+    UNKNOWN  = None
+
+_STATE_TEXT = {
+    CutterState.READY:    "Ready",
+    CutterState.MOVING:   "Busy / finishing job…",
+    CutterState.UNLOADED: "No media. Please load material.",
+    CutterState.PAUSED:   "Paused",
+    CutterState.UNKNOWN:  "Unknown status",
+}
+_STATE_COLOR = {
+    CutterState.READY:    "#0a0",  # green
+    CutterState.MOVING:   "#08f",  # blue
+    CutterState.UNLOADED: "#ca0",  # yellow
+    CutterState.PAUSED:   "#ca0",  # yellow
+    CutterState.UNKNOWN:  "#ca0",  # yellow
+}
+_CUTTING_COLOR = "#08f"  # blue while job streaming
 
 # --------------------------------------------------------------------------- #
 # Helper functions                                                            #
@@ -92,6 +117,97 @@ def detect_dev() -> Optional[str]:
         if usb.core.find(idVendor=vid, idProduct=pid):
             return _NAME[(vid, pid)]
     return None
+
+
+def _open_dev_bi():
+    """
+    Open first supported Silhouette cutter and return (dev, intf, ep_out, ep_in).
+    Caller *must* release & dispose.
+    """
+    for vid, pid in _SUPPORTED:
+        dev = usb.core.find(idVendor=vid, idProduct=pid)
+        if not dev:
+            continue
+
+        try:
+            if dev.is_kernel_driver_active(0):
+                try:
+                    dev.detach_kernel_driver(0)
+                except usb.core.USBError:
+                    pass
+        except (NotImplementedError, usb.core.USBError):
+            pass
+
+        try:
+            dev.set_configuration()
+        except usb.core.USBError:
+            pass
+
+        cfg = dev.get_active_configuration()
+        intf = cfg[(0, 0)]
+
+        try:
+            usb.util.claim_interface(dev, intf.bInterfaceNumber)
+        except usb.core.USBError:
+            pass
+
+        ep_out = usb.util.find_descriptor(
+            intf,
+            custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress)
+            == usb.util.ENDPOINT_OUT,
+        )
+        ep_in = usb.util.find_descriptor(
+            intf,
+            custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress)
+            == usb.util.ENDPOINT_IN,
+        )
+
+        if ep_out and ep_in:
+            return dev, intf, ep_out, ep_in
+
+        try:
+            usb.util.release_interface(dev, intf.bInterfaceNumber)
+        except Exception:
+            pass
+        usb.util.dispose_resources(dev)
+
+    raise RuntimeError("No supported cutter found")
+
+
+def query_cutter_state(timeout_ms: int = 500) -> CutterState:
+    """
+    Poll the cutter's current state using the ESC-0x05 command.
+    Returns a CutterState enum. Raises RuntimeError if no device found.
+    """
+    dev = intf = ep_out = ep_in = None
+    try:
+        dev, intf, ep_out, ep_in = _open_dev_bi()
+        ep_out.write(b"\x1b\x05", timeout=0)  # status request
+
+        try:
+            data_arr = ep_in.read(ep_in.wMaxPacketSize or 64, timeout=timeout_ms)
+            try:
+                data = data_arr.tobytes()
+            except AttributeError:
+                data = bytes(data_arr)
+        except usb.core.USBError:
+            data = b""
+
+        code = data[:1] if data else b""
+        if   code == CutterState.READY.value:    return CutterState.READY
+        elif code == CutterState.MOVING.value:   return CutterState.MOVING
+        elif code == CutterState.UNLOADED.value: return CutterState.UNLOADED
+        elif code == CutterState.PAUSED.value:   return CutterState.PAUSED
+        else:                                    return CutterState.UNKNOWN
+
+    finally:
+        if dev is not None and intf is not None:
+            try:
+                usb.util.release_interface(dev, intf.bInterfaceNumber)
+            except Exception:
+                pass
+        if dev is not None:
+            usb.util.dispose_resources(dev)
 
 
 # --------------------------------------------------------------------------- #
@@ -113,7 +229,7 @@ class ZoomView(QGraphicsView):
 
 
 # --------------------------------------------------------------------------- #
-# USB streaming thread                                                        #
+# USB streaming thread (opens/claims/releases each job)                       #
 # --------------------------------------------------------------------------- #
 class UsbSender(QThread):
     progress = pyqtSignal(int)
@@ -123,41 +239,86 @@ class UsbSender(QThread):
     def __init__(self, fn: Path, parent=None):
         super().__init__(parent)
         self.fn = fn
+        self.canceled = False  # debug marker
 
     @staticmethod
-    def _ep_out():
+    def _open_dev():
+        """Return (dev, intf, ep_out) for first supported cutter (OUT only)."""
         for vid, pid in _SUPPORTED:
             dev = usb.core.find(idVendor=vid, idProduct=pid)
             if not dev:
                 continue
+
+            try:
+                if dev.is_kernel_driver_active(0):
+                    try:
+                        dev.detach_kernel_driver(0)
+                    except usb.core.USBError:
+                        pass
+            except (NotImplementedError, usb.core.USBError):
+                pass
+
             try:
                 dev.set_configuration()
             except usb.core.USBError:
                 pass
-            intf = dev.get_active_configuration()[(0, 0)]
-            ep = usb.util.find_descriptor(
+
+            cfg = dev.get_active_configuration()
+            intf = cfg[(0, 0)]
+
+            try:
+                usb.util.claim_interface(dev, intf.bInterfaceNumber)
+            except usb.core.USBError:
+                pass
+
+            ep_out = usb.util.find_descriptor(
                 intf,
                 custom_match=lambda e: usb.util.endpoint_direction(
                     e.bEndpointAddress
                 ) == usb.util.ENDPOINT_OUT,
             )
-            if ep:
-                return ep
+            if ep_out:
+                return dev, intf, ep_out
+
+            try:
+                usb.util.release_interface(dev, intf.bInterfaceNumber)
+            except Exception:
+                pass
+            usb.util.dispose_resources(dev)
+
         raise RuntimeError("No supported cutter found")
 
     def run(self):
+        dev = intf = ep = None
         try:
-            ep = self._ep_out()
+            dev, intf, ep = self._open_dev()
             size = max(1, self.fn.stat().st_size)
             sent = 0
             with self.fn.open("rb") as fh:
-                for chunk in iter(lambda: fh.read(CHUNK), b""):
+                while True:
+                    if self.isInterruptionRequested():
+                        self.canceled = True
+                        break
+                    chunk = fh.read(CHUNK)
+                    if not chunk:
+                        break
+                    if self.isInterruptionRequested():
+                        self.canceled = True
+                        break
                     ep.write(chunk, timeout=0)
                     sent += len(chunk)
                     self.progress.emit(int(sent / size * 100))
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            if dev is not None and intf is not None:
+                try:
+                    usb.util.release_interface(dev, intf.bInterfaceNumber)
+                except Exception:
+                    pass
+            if dev is not None:
+                usb.util.dispose_resources(dev)
 
 
 # --------------------------------------------------------------------------- #
@@ -180,7 +341,7 @@ class MultiPassWidget(QWidget):
         top.addWidget(lbl_passes)
         self.pass_spin = QSpinBox()
         self.pass_spin.setRange(1, 3)
-        self.pass_spin.setValue(2)
+        self.pass_spin.setValue(1)
         self.pass_spin.setToolTip("Number of cut passes (1–3).")
         top.addWidget(self.pass_spin)
         top.addStretch()
@@ -227,7 +388,6 @@ class MultiPassWidget(QWidget):
             self.speed_spins.append(s)
             self.force_spins.append(f)
 
-        # Enable/disable pass rows on change
         self.pass_spin.valueChanged.connect(self._update_enabled)
 
     def _update_enabled(self, val: int):
@@ -255,7 +415,92 @@ class Gui(QWidget):
     def __init__(self):
         super().__init__()
         self._strokes: List[List[Tuple[float, float]]] = []
+        self._sender: Optional[UsbSender] = None  # active USB job
+        self._job_active = False
+        self._cut_cancel_requested = False  # GUI-scoped cancel flag
         self._build_ui()
+        self._load_settings()  # <-- load persisted values
+
+    # ------------------------- settings helpers -----------------------------
+    def _settings(self) -> QSettings:
+        # org/app as requested
+        return QSettings("Rob0xFF", "Gerber2Graphtec")
+
+    @staticmethod
+    def _to_bool(v) -> bool:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes", "on")
+        return bool(v)
+
+    def _load_settings(self):
+        s = self._settings()
+
+        # paths
+        gerb = s.value("paths/gerber", None, type=str)
+        if gerb:
+            self.inp["gerber"].setText(gerb)
+        outp = s.value("paths/output", None, type=str)
+        if outp:
+            self.inp["output"].setText(outp)
+
+        # scalar text params
+        off = s.value("params/offset", None, type=str)
+        if off: self.offset_edit.setText(off)
+        mar = s.value("params/margin", None, type=str)
+        if mar: self.border_edit.setText(mar)
+        trn = s.value("params/transform", None, type=str)
+        if trn: self.matrix_edit.setText(trn)
+
+        # merge
+        merg = s.value("params/merge_enabled", None)
+        if merg is not None:
+            self.merge_chk.setChecked(self._to_bool(merg))
+        mtol = s.value("params/merge_tol", None, type=str)
+        if mtol: self.merge_thresh_edit.setText(mtol)
+
+        # mode
+        mode_val = s.value("params/mode", None, type=int)
+        if mode_val is not None:
+            # find item with matching data(); fallback index 0
+            idx = self.mode_cmb.findData(mode_val)
+            if idx < 0: idx = 0
+            self.mode_cmb.setCurrentIndex(idx)
+
+        # passes + per-pass values
+        passes = s.value("params/passes", None, type=int)
+        if passes is not None:
+            self.multi_pass.pass_spin.setValue(max(1, min(3, passes)))
+        # set all stored values (even if disabled)
+        for i in range(3):
+            sp = s.value(f"params/speed_{i+1}", None, type=int)
+            if sp is not None:
+                self.multi_pass.speed_spins[i].setValue(max(1, min(10, sp)))
+            fo = s.value(f"params/force_{i+1}", None, type=int)
+            if fo is not None:
+                self.multi_pass.force_spins[i].setValue(max(1, min(33, fo)))
+
+    def _save_settings(self):
+        s = self._settings()
+        # paths
+        s.setValue("paths/gerber",  self.inp["gerber"].text())
+        s.setValue("paths/output",  self.inp["output"].text())
+        # text params
+        s.setValue("params/offset",    self.offset_edit.text())
+        s.setValue("params/margin",    self.border_edit.text())
+        s.setValue("params/transform", self.matrix_edit.text())
+        # merge
+        s.setValue("params/merge_enabled", self.merge_chk.isChecked())
+        s.setValue("params/merge_tol",     self.merge_thresh_edit.text())
+        # mode
+        s.setValue("params/mode", self.mode_cmb.currentData())
+        # passes + per-pass
+        s.setValue("params/passes", self.multi_pass.passes())
+        for i in range(3):
+            s.setValue(f"params/speed_{i+1}", self.multi_pass.speed_spins[i].value())
+            s.setValue(f"params/force_{i+1}", self.multi_pass.force_spins[i].value())
+        s.sync()
 
     # ------------------------- UI layout ------------------------------------
     def _build_ui(self):
@@ -269,21 +514,24 @@ class Gui(QWidget):
         # Cutter box ---------------------------------------------------------
         cutter_box = QGroupBox("Cutter")
         cutter_box.setToolTip("Connected Silhouette cutter (auto-detected).")
-        dl = QHBoxLayout(cutter_box)
+        dgrid = QGridLayout(cutter_box)
+        dgrid.setVerticalSpacing(2)
+        dgrid.setContentsMargins(8, 8, 8, 8)
+        left.addWidget(cutter_box)
+
         self.ind = QLabel()
         self.ind.setFixedSize(10, 10)
         self.ind.setStyleSheet("border-radius:5px;background:#a00")
-        self.ind.setToolTip("Green = detected, red = not detected.")
-        self.dev_lbl = QLabel("not detected")
+        self.ind.setToolTip("Green = ready, Yellow = detected but not ready, Red = no cutter, Blue = cutting.")
+        dgrid.addWidget(self.ind, 0, 0, 2, 1, Qt.AlignVCenter)
+
+        self.dev_lbl = QLabel("No cutter found")
         self.dev_lbl.setToolTip("Detected cutter model, if any.")
-        dl.addWidget(self.ind)
-        dl.addWidget(self.dev_lbl)
-        dl.addStretch()
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.setToolTip("Re-scan USB for supported cutters.")
-        btn_refresh.clicked.connect(self._update_device)
-        dl.addWidget(btn_refresh)
-        left.addWidget(cutter_box)
+        dgrid.addWidget(self.dev_lbl, 0, 1, 1, 1, Qt.AlignLeft | Qt.AlignVCenter)
+
+        self.dev_state_lbl = QLabel("")
+        self.dev_state_lbl.setToolTip("Current cutter status.")
+        dgrid.addWidget(self.dev_state_lbl, 1, 1, 1, 1, Qt.AlignLeft | Qt.AlignTop)
 
         # Job Files box ------------------------------------------------------
         files_box = QGroupBox("Job Files")
@@ -336,24 +584,20 @@ class Gui(QWidget):
         add_row("Transform:", self.matrix_edit,
                 "Affine transform [a,b,c,d] applied before output (advanced).")
 
-        # Multi-pass widget spans both columns
         self.multi_pass = MultiPassWidget()
         self.multi_pass.setToolTip("Configure up to 3 passes with individual speed/force values.")
         pg.addWidget(self.multi_pass, cur, 0, 1, 2)
         cur += 1
 
-        # Merge checkbox
         self.merge_chk = QCheckBox("Merge small shapes")
         self.merge_chk.setToolTip("Collapse / simplify very small or overlapping pad shapes before cutting.")
         pg.addWidget(self.merge_chk, cur, 0, 1, 2)
         cur += 1
 
-        # Merge tolerance
-        self.merge_thresh_edit = QLineEdit("0.014,0.01")
+        self.merge_thresh_edit = QLineEdit("0.014,0.009")
         add_row("Merge tol.:", self.merge_thresh_edit,
                 "Min size and distance of shapes to merge (inches).")
 
-        # Mode
         self.mode_cmb = QComboBox()
         self.mode_cmb.addItem("Enhanced", 0)
         self.mode_cmb.addItem("Standard", 1)
@@ -372,7 +616,6 @@ class Gui(QWidget):
         actions.addWidget(btn_cut)
         left.addLayout(actions)
 
-        # Spacer
         left.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # --- right pane (preview) ------------------------------------------
@@ -381,19 +624,60 @@ class Gui(QWidget):
         self.view.setMinimumSize(800, 600)
         main.addWidget(self.view)
 
-        # initial device scan
         self._update_device()
-
-        # initial placeholder
         self._show_preview()
+
+        # auto-refresh timer (1s)
+        self._dev_timer = QTimer(self)
+        self._dev_timer.setInterval(1000)
+        self._dev_timer.timeout.connect(self._poll_device)
+        self._dev_timer.start()
+
+    # ------------------------- periodic poll (skip while cutting) ----------
+    def _poll_device(self):
+        if self._job_active:
+            return
+        self._update_device()
 
     # ------------------------- device indicator ----------------------------
     def _update_device(self):
-        n = detect_dev()
-        self.ind.setStyleSheet(
-            f"border-radius:5px;background:{'#0a0' if n else '#a00'}"
-        )
-        self.dev_lbl.setText(n or "not detected")
+        """Update cutter detection + status indicator (idle-only)."""
+        if self._job_active:
+            return
+        name = detect_dev()
+        if not name:
+            self.ind.setStyleSheet("border-radius:5px;background:#a00")
+            self.dev_lbl.setText("No cutter found")
+            self.dev_state_lbl.setText("")
+            self.dev_lbl.setToolTip("No supported Silhouette cutter detected. Connect cutter.")
+            return
+
+        try:
+            state = query_cutter_state(timeout_ms=200)
+        except Exception as e:
+            self.ind.setStyleSheet("border-radius:5px;background:#ca0")
+            self.dev_lbl.setText(name)
+            self.dev_state_lbl.setText("Status error")
+            self.dev_state_lbl.setToolTip(str(e))
+            return
+
+        color = _STATE_COLOR[state]
+        text = _STATE_TEXT[state]
+        self.ind.setStyleSheet(f"border-radius:5px;background:{color}")
+        self.dev_lbl.setText(name)
+        self.dev_state_lbl.setText(text)
+        self.dev_state_lbl.setToolTip(f"Cutter state: {text}")
+
+    def _set_cutting_ui(self):
+        """Show blue dot + 'Cutting…' in cutter box (no %)."""
+        self.ind.setStyleSheet(f"border-radius:5px;background:{_CUTTING_COLOR}")
+        name = detect_dev() or "Cutter"
+        self.dev_lbl.setText(name)
+        self.dev_state_lbl.setText("Cutting…")
+
+    def _set_canceling_ui(self):
+        self.ind.setStyleSheet(f"border-radius:5px;background:{_CUTTING_COLOR}")
+        self.dev_state_lbl.setText("Canceling…")
 
     # ------------------------- file dialogs --------------------------------
     def _browse(self, is_open: bool):
@@ -411,14 +695,12 @@ class Gui(QWidget):
         self.scene.clear()
         item = self.scene.addText("Preview")
         font = QFont(item.font())
-        font.setPointSize(48)
+        font.setPointSize(30)
         item.setFont(font)
         item.setDefaultTextColor(Qt.lightGray)
         br = item.boundingRect()
-        # center around 0,0
         item.setPos(-br.width() / 2, -br.height() / 2)
         self.scene.setSceneRect(-br.width() / 2, -br.height() / 2, br.width(), br.height())
-        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
     # ------------------------- preview helper ------------------------------
     def _show_preview(self):
@@ -447,30 +729,24 @@ class Gui(QWidget):
             if not gbr.is_file():
                 raise RuntimeError("Gerber not found")
 
-            # basic params
             off = floats(self.offset_edit.text()) or [0, 0]
-            br = floats(self.border_edit.text()) or [0, 0]
+            br  = floats(self.border_edit.text()) or [0, 0]
             mat = floats(self.matrix_edit.text()) or [1, 0, 0, 1]
 
-            # multi-pass params
             speeds = self.multi_pass.speeds()
             forces = self.multi_pass.forces()
             cm = self.mode_cmb.currentData()
 
-            # merge
             merge = self.merge_chk.isChecked()
             merge_thresh = floats(self.merge_thresh_edit.text()) or [0.014, 0.009]
 
-            # extract strokes
             strokes = extract_strokes_from_gerber(str(gbr))
-            # library emits inches; convert to mm
             strokes = [[(x / 25.4, y / 25.4) for x, y in poly] for poly in strokes]
             if merge:
                 strokes = mergepads.fix_small_geometry(strokes, *merge_thresh)
             self._strokes = strokes
             self._show_preview()
 
-            # boundary
             max_x, max_y = optimize.max_extent(strokes)
             bpath = [
                 (-br[0], -br[1]),
@@ -479,7 +755,6 @@ class Gui(QWidget):
                 (-br[0], max_y + br[1]),
             ]
 
-            # write file
             with out.open("w") as fout:
                 g = graphtec.graphtec(out_file=fout)
                 g.start()
@@ -505,30 +780,126 @@ class Gui(QWidget):
                             g.closed_path(bpath)
                 g.end()
 
-            QMessageBox.information(self, "Done", f"Job file created:\n{out}")
+            # Save settings *after* successful prepare
+            self._save_settings()
+
+            QMessageBox.information(self, "Done", f"File saved:\n{out}")
         except Exception:
             QMessageBox.critical(self, "Error", traceback.format_exc())
 
     # ------------------------- USB upload ----------------------------------
     def _cut(self):
+        if self._sender is not None and self._sender.isRunning():
+            QMessageBox.warning(self, "Busy", "A cut job is already in progress.")
+            return
+
+        # Pre-flight readiness
+        while True:
+            name = detect_dev()
+            if not name:
+                QMessageBox.critical(self, "Error", "No cutter found.")
+                return
+            try:
+                state = query_cutter_state(timeout_ms=200)
+            except Exception as e:
+                btn = QMessageBox.question(
+                    self,
+                    "Cutter not accessible",
+                    f"Could not query cutter state:\n{e}\n\nRetry?",
+                    QMessageBox.Retry | QMessageBox.Cancel,
+                    QMessageBox.Retry,
+                )
+                if btn == QMessageBox.Retry:
+                    continue
+                return
+
+            if state is CutterState.READY:
+                break
+
+            msg = {
+                CutterState.UNLOADED: "No material loaded. Load media and try again.",
+                CutterState.MOVING:   "Cutter is busy. Wait for it to finish.",
+                CutterState.PAUSED:   "Cutter is paused. Clear pause and retry.",
+                CutterState.UNKNOWN:  "Cutter state unknown. Proceed anyway?",
+            }[state]
+
+            btn = QMessageBox.question(
+                self,
+                "Cutter not ready",
+                msg + "\n\nRetry?",
+                QMessageBox.Retry | QMessageBox.Cancel | QMessageBox.Ignore,
+                QMessageBox.Retry,
+            )
+            if btn == QMessageBox.Retry:
+                continue
+            if btn == QMessageBox.Ignore:
+                break
+            return
+
         out = Path(self.inp["output"].text())
         if not out.exists():
             QMessageBox.warning(self, "Missing", "Prepare file first")
             return
 
-        dlg = QProgressDialog("Cutting …", "Cancel", 0, 100, self)
+        dlg = QProgressDialog("Cutting … 0%", "Cancel", 0, 100, self)
         dlg.setWindowModality(Qt.WindowModal)
+        dlg.setAutoClose(False)   # prevent auto-close -> spurious canceled()
+        dlg.setAutoReset(False)
+        self._dlg_finishing = False  # guard against programmatic close
 
-        sender = UsbSender(out, self)
-        sender.progress.connect(dlg.setValue)
-        sender.finished.connect(
-            lambda: (dlg.close(), QMessageBox.information(self, "Done", "Job finished"))
-        )
-        sender.error.connect(
-            lambda m: (dlg.close(), QMessageBox.critical(self, "Error", m))
-        )
-        dlg.canceled.connect(sender.terminate)
-        sender.start()
+        self._sender = UsbSender(out, self)
+
+        def _prog(p: int):
+            dlg.setValue(p)
+            dlg.setLabelText(f"Cutting … {p}%")
+
+        self._sender.progress.connect(_prog)
+
+        self._job_active = True
+        self._cut_cancel_requested = False  # reset cancel flag
+        self._set_cutting_ui()
+
+        # ---- local handlers ------------------------------------------------
+        def _cleanup():
+            if self._sender:
+                self._sender.deleteLater()
+                self._sender = None
+            self._job_active = False
+            self._update_device()  # resume real polling
+
+        def _done():
+            self._dlg_finishing = True
+            dlg.close()  # may emit canceled(); guard in _cancel()
+            if self._cut_cancel_requested:
+                QMessageBox.information(self, "Canceled", "Job canceled.")
+            else:
+                QMessageBox.information(self, "Done", "Job finished.")
+            _cleanup()
+
+        def _err(msg: str):
+            self._dlg_finishing = True
+            dlg.close()
+            QMessageBox.critical(self, "Error", msg)
+            _cleanup()
+
+        def _cancel():
+            # Guard against programmatic close at finish.
+            if self._dlg_finishing:
+                return
+            if not (self._sender and self._sender.isRunning()):
+                return
+            self._cut_cancel_requested = True
+            dlg.setLabelText("Canceling …")
+            dlg.setCancelButton(None)
+            self._set_canceling_ui()
+            self._sender.canceled = True
+            self._sender.requestInterruption()
+
+        self._sender.finished.connect(_done)
+        self._sender.error.connect(_err)
+        dlg.canceled.connect(_cancel)
+
+        self._sender.start()
         dlg.show()
 
 
