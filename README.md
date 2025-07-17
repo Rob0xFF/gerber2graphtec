@@ -180,7 +180,7 @@ pip install pcb-tools pyusb PyQt5
 - Developed on **macOS** & tested on **macOS**, Windows 11 and **Kubuntu** with a **Silhouette Portrait (gen 1)**.
 - Other Linux flavors are **currently untested**; PyUSB + appropriate permissions *should* enable support — please report success/failures.
 - When running on **Linux** you may need a **udev rule** to grant non‑root USB access (VID 0x0B4D, matching your PID).
-- When running on **Windows** you may need to **change the driver** to **WinUSB (libusb)** to access the device. See [https://zadig.akeo.ie](https://zadig.akeo.ie) for further assistance.
+- When running on **Windows** you may need to **change the driver** to **WinUSB or libusb** to access the device, as the standard printer driver class yields a Status error (Operation not supported or unimplemented on this platform). See [https://zadig.akeo.ie](https://zadig.akeo.ie) for further assistance.
 - If the cutter seems to accept data instantly but does not move, confirm material is loaded; the GUI polls state but cannot always detect failed loads on all models.
 - Adjust `CHUNK` in `g2g_gui.py` to tune progress granularity vs overhead (smaller = finer progress updates).
 
