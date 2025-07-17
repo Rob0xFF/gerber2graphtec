@@ -69,9 +69,9 @@ This fork modernizes the pipeline while preserving the original project’s prov
 
 ## Quick Start
 
-> **Tested hardware:** Silhouette **Portrait (1st gen)** on macOS. Other cutters listed below are **auto‑detected but untested** — community feedback welcome!
+> **Tested hardware:** Silhouette **Portrait (1st gen)** on macOS, Kubuntu and Windows 11. Other cutters listed below are **auto‑detected but untested** — community feedback welcome!
 >
-> **OS support:** Developed on macOS. Windows & Linux builds are **not yet fully tested**; please report results.
+> **OS support:** Developed on macOS. Windows & Linux builds ware **quick tested** and should work as intended; please report results.
 
 ### 1. Install (recommended: virtualenv)
 
@@ -130,7 +130,7 @@ python g2g_gui.py
 
 | Model                   | VID    | PID    | Tested? |
 | ----------------------- | ------ | ------ | ------- |
-| Silhouette Portrait     | 0x0B4D | 0x1123 | ✅ macOS, Kubuntu |
+| Silhouette Portrait     | 0x0B4D | 0x1123 | ✅ macOS, Kubuntu, Win64 |
 | Silhouette Portrait 2   | 0x0B4D | 0x1132 | ❓       |
 | Silhouette Portrait 3   | 0x0B4D | 0x113A | ❓       |
 | Silhouette Cameo        | 0x0B4D | 0x1121 | ❓       |
@@ -177,9 +177,10 @@ pip install pcb-tools pyusb PyQt5
 
 ## Development Notes
 
-- Developed on **macOS** & tested on **macOS** and **Kubuntu** with a **Silhouette Portrait (gen 1)**.
-- Windows & other Linux flavors are **currently untested**; PyUSB + appropriate permissions *should* enable support — please report success/failures.
+- Developed on **macOS** & tested on **macOS**, Windows 11 and **Kubuntu** with a **Silhouette Portrait (gen 1)**.
+- Other Linux flavors are **currently untested**; PyUSB + appropriate permissions *should* enable support — please report success/failures.
 - When running on **Linux** you may need a **udev rule** to grant non‑root USB access (VID 0x0B4D, matching your PID).
+- When running on **Windows** you may need to **change the driver** to **WinUSB (libusb)** to access the device.
 - If the cutter seems to accept data instantly but does not move, confirm material is loaded; the GUI polls state but cannot always detect failed loads on all models.
 - Adjust `CHUNK` in `g2g_gui.py` to tune progress granularity vs overhead (smaller = finer progress updates).
 
