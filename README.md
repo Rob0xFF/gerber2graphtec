@@ -207,6 +207,8 @@ Thanks to the authors of **robocut** and **graphtecprint** for Graphtec protocol
 - [http://vidar.botfu.org/graphtecprint](http://vidar.botfu.org/graphtecprint)
 - [https://github.com/jnweiger/graphtecprint](https://github.com/jnweiger/graphtecprint)
 
+- [https://fishpepper.de/2017/10/13/cutting-solder-paste-stencils-with-the-silhouette-plotter-gerber2graphtec-modification-for-tiny-structures/](https://fishpepper.de/2017/10/13/cutting-solder-paste-stencils-with-the-silhouette-plotter-gerber2graphtec-modification-for-tiny-structures/)
+
 Additional inspiration: **Cathy Sexton** – [http://www.idleloop.com/robotics/cutter/index.php](http://www.idleloop.com/robotics/cutter/index.php)
 
 ---
@@ -251,6 +253,7 @@ This fork stands on a lot of earlier work.
 
 - The original *gerber2graphtec* command‑line utilities and community discussion that proved low‑cost craft cutters can produce usable SMT stencils.
 - Contributors in the Dangerous Prototypes forums, including **jesuscf**, who produced an early GUI (Tk/Tkinter) that helped many users get started.
+- fishpepper for contributing the merge small structures algorithm in his fork of the original repository.
 - The authors and maintainers of **robocut** and **graphtecprint**, whose protocol exploration informed Graphtec/Silhouette command formats.
 - The maintainers of **pcb‑tools** (native Gerber parsing) and **py\_silhouette** (Silhouette USB protocol & device state research), both of which influenced this rewrite.
 - Users who have shared real‑world cut settings, film choices, and calibration tips over the years.
